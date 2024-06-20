@@ -1,0 +1,193 @@
+Query 1: Counts activities by course and activity type.
+Query 2: Calculates the average session duration by device type using TIMESTAMPDIFF function.
+Query 3: Identifies the most accessed content types across all courses.
+Query 4: Analyzes the path of activities for a specific course (replace 'Mathematics' with desired course name).
+Query 5: Computes the daily active users (DAU) by grouping activities by date.
+Query 6: Tracks the trend of quiz completion rate over time.
+Query 7: Conducts a conversion funnel analysis to measure student progression through course stages (lecture -> quiz -> assignment)
+Query 8: Student engagement metrics over time.
+Query 9: Comparative analysis of quiz scores by course.
+Query 10: Student activity pattern analysis for the first activity per student.
+
+-- 1. Count of Activities by Course and Activity Type
+SELECT
+    course_name,
+    activity_type,
+    COUNT(*) AS activity_count
+FROM
+    student_activity
+GROUP BY
+    course_name,
+    activity_type
+ORDER BY
+    course_name,
+    activity_type;
+
+-- 2. Average Session Duration by Device Type
+SELECT
+    device_type,
+    AVG(TIMESTAMPDIFF(MINUTE, MIN(event_time), MAX(event_time))) AS avg_session_duration_minutes
+FROM
+    student_activity
+GROUP BY
+    device_type;
+
+-- 3. Most Accessed Content Types
+SELECT
+    content_type,
+    COUNT(*) AS access_count
+FROM
+    student_activity
+GROUP BY
+    content_type
+ORDER BY
+    access_count DESC;
+
+-- 4. Path Analysis for a Specific Course
+SELECT
+    student_id,
+    path,
+    COUNT(*) AS path_count
+FROM
+    student_activity
+WHERE
+    course_name = 'Mathematics'  -- Replace with desired course name
+GROUP BY
+    student_id,
+    path
+ORDER BY
+    student_id,
+    path_count DESC;
+
+-- 5. Daily Active Users (DAU) Calculation
+SELECT
+    DATE(event_time) AS activity_date,
+    COUNT(DISTINCT student_id) AS daily_active_users
+FROM
+    student_activity
+GROUP BY
+    activity_date
+ORDER BY
+    activity_date;
+
+-- 6. Trend of Quiz Completion Rate Over Time
+SELECT
+    DATE(event_time) AS activity_date,
+    SUM(CASE WHEN activity_type = 'quiz' THEN 1 ELSE 0 END) AS total_quizzes,
+    SUM(CASE WHEN activity_type = 'quiz' AND url IS NOT NULL THEN 1 ELSE 0 END) AS completed_quizzes,
+    ROUND(SUM(CASE WHEN activity_type = 'quiz' AND url IS NOT NULL THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN activity_type = 'quiz' THEN 1 ELSE 0 END), 0) * 100, 2) AS completion_rate_percent
+FROM
+    student_activity
+GROUP BY
+    activity_date
+ORDER BY
+    activity_date;
+
+-- 7. Conversion Funnel Analysis
+WITH activity_stages AS (
+    SELECT
+        student_id,
+        course_name,
+        MIN(CASE WHEN activity_type = 'lecture' THEN event_time END) AS lecture_time,
+        MIN(CASE WHEN activity_type = 'quiz' THEN event_time END) AS quiz_time,
+        MIN(CASE WHEN activity_type = 'assignment' THEN event_time END) AS assignment_time
+    FROM
+        student_activity
+    GROUP BY
+        student_id,
+        course_name
+)
+SELECT
+    course_name,
+    COUNT(*) AS total_students,
+    SUM(CASE WHEN lecture_time IS NOT NULL THEN 1 ELSE 0 END) AS started_lectures,
+    SUM(CASE WHEN quiz_time IS NOT NULL THEN 1 ELSE 0 END) AS started_quizzes,
+    SUM(CASE WHEN assignment_time IS NOT NULL THEN 1 ELSE 0 END) AS completed_assignments
+FROM
+    activity_stages
+GROUP BY
+    course_name;
+
+
+-- Advanced Queries
+
+WITH engagement_metrics AS (
+    SELECT
+        student_id,
+        DATE(event_time) AS activity_date,
+        COUNT(*) AS total_activities,
+        SUM(CASE WHEN activity_type = 'lecture' THEN 1 ELSE 0 END) AS lectures,
+        SUM(CASE WHEN activity_type = 'quiz' THEN 1 ELSE 0 END) AS quizzes,
+        SUM(CASE WHEN activity_type = 'assignment' THEN 1 ELSE 0 END) AS assignments,
+        SUM(CASE WHEN activity_type = 'forum_post' THEN 1 ELSE 0 END) AS forum_posts
+    FROM
+        student_activity
+    GROUP BY
+        student_id,
+        activity_date
+),
+quiz_scores AS (
+    SELECT
+        student_id,
+        course_name,
+        event_time AS quiz_time,
+        MAX(score) AS max_score,
+        MIN(score) AS min_score,
+        AVG(score) AS avg_score,
+        COUNT(*) AS attempts
+    FROM
+        student_activity
+    WHERE
+        activity_type = 'quiz' AND score IS NOT NULL
+    GROUP BY
+        student_id,
+        course_name,
+        quiz_time
+),
+ranked_activities AS (
+    SELECT
+        student_id,
+        activity_type,
+        event_time,
+        ROW_NUMBER() OVER(PARTITION BY student_id ORDER BY event_time) AS activity_rank
+    FROM
+        student_activity
+)
+SELECT
+    -- Query 8: Student Engagement Metrics Over Time
+    em.activity_date,
+    COUNT(DISTINCT em.student_id) AS active_students,
+    AVG(em.total_activities) AS avg_activities_per_student,
+    AVG(em.lectures) AS avg_lectures_per_student,
+    AVG(em.quizzes) AS avg_quizzes_per_student,
+    AVG(em.assignments) AS avg_assignments_per_student,
+    AVG(em.forum_posts) AS avg_forum_posts_per_student,
+    
+    -- Query 9: Comparative Analysis of Quiz Scores by Course
+    qs.course_name,
+    COUNT(DISTINCT qs.student_id) AS students_attempted,
+    COUNT(*) AS quizzes_attempted,
+    AVG(qs.avg_score) AS avg_avg_score,
+    MAX(qs.max_score) AS highest_score,
+    MIN(qs.min_score) AS lowest_score,
+    AVG(qs.attempts) AS avg_attempts_per_quiz,
+    
+    -- Query 10: Student Activity Pattern Analysis
+    ra.activity_type,
+    ra.event_time AS start_time,
+    LEAD(ra.event_time) OVER(PARTITION BY ra.student_id ORDER BY ra.event_time) AS end_time,
+    TIMESTAMPDIFF(MINUTE, ra.event_time, LEAD(ra.event_time) OVER(PARTITION BY ra.student_id ORDER BY ra.event_time)) AS duration_minutes
+FROM
+    engagement_metrics em
+LEFT JOIN
+    quiz_scores qs ON em.student_id = qs.student_id
+LEFT JOIN
+    ranked_activities ra ON em.student_id = ra.student_id AND ra.activity_rank = 1
+GROUP BY
+    em.activity_date,
+    qs.course_name,
+    ra.activity_type,
+    ra.event_time
+ORDER BY
+    em.activity_date;
+
